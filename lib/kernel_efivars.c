@@ -16,7 +16,10 @@
 #include <unistd.h>
 #include <time.h>
 
-#define __STDC_VERSION__ 199901L
+#ifndef __STDC_VERSION__
+# define __STDC_VERSION__ 199901L
+#endif
+
 #include <efi.h>
 
 #include <kernel_efivars.h>
@@ -30,6 +33,7 @@ void
 kernel_variable_init(void)
 {
 	char fname[] = "/tmp/efi.XXXXXX";
+        char *fnamep;
 	char cmdline[256];
 	int fd, ret;
 	struct stat st;
@@ -37,7 +41,12 @@ kernel_variable_init(void)
 
 	if (kernel_efi_path)
 		return;
-	mktemp(fname);
+	fnamep = mkdtemp(fname);
+        if (!fnamep)
+          {
+            fprintf(stderr, "Couldn't allocate a temporary file name: '%s'\n", fname);
+            exit(1);
+          }
 	snprintf(cmdline, sizeof(cmdline), "mount -l > %s", fname);
 	ret = system(cmdline);
 	if (WEXITSTATUS(ret) != 0)
@@ -58,7 +67,11 @@ kernel_variable_init(void)
 		exit(1);
 	}
 	buf = malloc(st.st_size);
-	read(fd, buf, st.st_size);
+	int rdbytes = read(fd, buf, st.st_size);
+        if (rdbytes != st.st_size)
+          {
+            fprintf(stderr, "warning: Couldn't read (%d) as much bytes as requested (%d)\n", rdbytes, st.st_size);
+          }
 	close(fd);
 
 	char *ptr = buf;
@@ -97,20 +110,38 @@ get_variable(const char *var, EFI_GUID *guid, uint32_t *attributes,
 	fd = open(varfs, O_RDONLY);
 	free(varfs);
 	if (fd < 0)
-		return errno;
+          return errno;
 	
 	if (fstat(fd, &st) < 0)
-		return errno;
+          return errno;
 	if (size)
-		*size = st.st_size - sizeof(attr);
+          *size = st.st_size - sizeof(attr);
 
-	read(fd, &attr, sizeof(attr));
+        int attrlen = sizeof(attr);
+        int rdbytes = read(fd, &attr, attrlen);
+        if (rdbytes != attrlen)
+          {
+            fprintf(stderr,
+                    "warning: Couldn't read (%d) as much bytes as"
+                    " requested (%d) while reading attributes \n",
+                    rdbytes, attrlen);
+          }
 
 	if (attributes)
-		*attributes = attr;
-
+          *attributes = attr;
+        
 	if (buf)
-		read(fd, buf, st.st_size - sizeof(attr));
+          {
+            int attrlen2 = st.st_size - sizeof(attr);
+            int rdbytes2 = read(fd, buf, attrlen2);
+            if (rdbytes2 != attrlen2)
+              {
+                fprintf(stderr,
+                        "warning: Couldn't read (%d) as much bytes as"
+                        " requested (%d) while reading attributes values\n",
+                        rdbytes2, attrlen2);
+              }
+          }
 
 	close(fd);
 
